@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert";
 import http from "node:http";
 import { io as ioClient, Socket as ClientSocket } from "socket.io-client";
-import { createSignalingServer } from "../server/signaling-server";
+import { createSignalingServer, isOriginAllowed } from "../server/signaling-server";
 import type {
   CreateRoomResponse,
   JoinRoomResponse,
@@ -222,5 +222,40 @@ test("Security & Authorization Suite", async (t) => {
 
     assert.strictEqual(gotRateLimitError, true);
     client.disconnect();
+  });
+
+  await t.test("isOriginAllowed correctly authorizes local, LAN, wildcard, and production origins", () => {
+    const configuredOrigins = ["https://sharehub.example.com", "*.presentation.internal"];
+
+    // No origin (curl, server-to-server)
+    assert.strictEqual(isOriginAllowed(undefined, configuredOrigins), true);
+
+    // Loopback localhost origins
+    assert.strictEqual(isOriginAllowed("http://localhost:3000", configuredOrigins), true);
+    assert.strictEqual(isOriginAllowed("http://127.0.0.1:3000", configuredOrigins), true);
+
+    // LAN IP origins (RFC 1918)
+    assert.strictEqual(isOriginAllowed("http://192.168.1.50:3000", configuredOrigins), true);
+    assert.strictEqual(isOriginAllowed("http://10.0.0.12:3001", configuredOrigins), true);
+    assert.strictEqual(isOriginAllowed("http://172.20.10.5:3000", configuredOrigins), true);
+
+    // Exact configured origin
+    assert.strictEqual(isOriginAllowed("https://sharehub.example.com", configuredOrigins), true);
+
+    // Wildcard subdomain
+    assert.strictEqual(isOriginAllowed("https://room1.presentation.internal", configuredOrigins), true);
+
+    // Wildcard global
+    assert.strictEqual(isOriginAllowed("https://anywhere.org", ["*"]), true);
+
+    // Production mode rejects unauthorized origins
+    const envObj = process.env as Record<string, string | undefined>;
+    const origEnv = envObj.NODE_ENV;
+    try {
+      envObj.NODE_ENV = "production";
+      assert.strictEqual(isOriginAllowed("https://unauthorized-attacker.com", configuredOrigins), false);
+    } finally {
+      envObj.NODE_ENV = origEnv;
+    }
   });
 });

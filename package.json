@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "concurrently -k -p \"[{name}]\" -n \"SIGNAL,NEXT\" -c \"cyan,magenta\" \"tsx server/index.ts\" \"next dev\"",
+    "dev:frontend": "next dev",
+    "dev:server": "tsx watch server/index.ts",
     "build": "next build",
     "start": "next start",
     "server": "tsx server/index.ts",
@@ -30,6 +32,7 @@
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "concurrently": "^10.0.6",
     "eslint": "^9",
     "eslint-config-next": "16.4.0",
     "tailwindcss": "^4",

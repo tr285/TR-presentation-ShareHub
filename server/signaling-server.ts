@@ -44,6 +44,77 @@ const MAX_CANDIDATE_LENGTH = 2048; // 2 KB
 const MAX_ROOM_ID_LENGTH = 32;
 const MAX_PASSCODE_LENGTH = 64;
 
+export function isOriginAllowed(
+  origin: string | undefined,
+  allowedOrigins: string[]
+): boolean {
+  // Allow requests without Origin header (e.g. curl, native clients, server-to-server)
+  if (!origin) return true;
+
+  // In non-production/development mode, allow all origins for seamless local Wi-Fi & LAN testing
+  if (process.env.NODE_ENV !== "production") {
+    return true;
+  }
+
+  // Explicit wildcard
+  if (allowedOrigins.includes("*")) {
+    return true;
+  }
+
+  // Exact match
+  if (allowedOrigins.includes(origin)) {
+    return true;
+  }
+
+  try {
+    const url = new URL(origin);
+    const hostname = url.hostname;
+
+    // Allow loopback & local addresses
+    if (
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "0.0.0.0" ||
+      hostname.endsWith(".local")
+    ) {
+      return true;
+    }
+
+    // Allow RFC 1918 private LAN IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16)
+    if (
+      hostname.startsWith("192.168.") ||
+      hostname.startsWith("10.") ||
+      /^172\.(1[6-9]|2\d|3[0-1])\./.test(hostname)
+    ) {
+      return true;
+    }
+
+    // Pattern matching in allowedOrigins (e.g. *.domain.com)
+    for (const allowed of allowedOrigins) {
+      if (allowed === "*") return true;
+      if (allowed.startsWith("*.")) {
+        const domain = allowed.slice(2);
+        if (hostname === domain || hostname.endsWith(`.${domain}`)) {
+          return true;
+        }
+      }
+      try {
+        const allowedUrl = new URL(allowed);
+        if (allowedUrl.origin === url.origin) {
+          return true;
+        }
+      } catch {
+        if (allowed === hostname) return true;
+      }
+    }
+  } catch {
+    return allowedOrigins.includes(origin);
+  }
+
+  return false;
+}
+
 export function createSignalingServer(
   config: SignalingServerConfig = {}
 ): SignalingServerInstance {
@@ -52,6 +123,8 @@ export function createSignalingServer(
       ? config.corsOrigins
       : process.env.ALLOWED_ORIGINS
       ? process.env.ALLOWED_ORIGINS.split(",").map((s) => s.trim())
+      : process.env.CORS_ORIGIN
+      ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim())
       : DEFAULT_ALLOWED_ORIGINS;
 
   const roomManager = new RoomManager(config.autoCleanupIntervalMs ?? 30000);
@@ -80,10 +153,18 @@ export function createSignalingServer(
 
       // Set CORS headers for HTTP endpoints
       const origin = req.headers.origin;
-      if (origin && (allowedOrigins.includes("*") || allowedOrigins.includes(origin))) {
-        res.setHeader("Access-Control-Allow-Origin", origin);
-        res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+      if (isOriginAllowed(origin, allowedOrigins)) {
+        if (origin) {
+          res.setHeader("Access-Control-Allow-Origin", origin);
+        } else if (allowedOrigins.includes("*")) {
+          res.setHeader("Access-Control-Allow-Origin", "*");
+        }
+        res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+        res.setHeader(
+          "Access-Control-Allow-Headers",
+          "Content-Type, Authorization, X-Requested-With"
+        );
+        res.setHeader("Access-Control-Allow-Credentials", "true");
       }
 
       if (req.method === "OPTIONS") {
@@ -135,19 +216,7 @@ export function createSignalingServer(
   const io = new SocketIOServer(httpServer, {
     cors: {
       origin: (origin, callback) => {
-        if (!origin) return callback(null, true);
-        if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
-          return callback(null, true);
-        }
-        const matches = allowedOrigins.some((allowed) => {
-          if (allowed.startsWith("*.")) {
-            const domain = allowed.slice(2);
-            return origin.endsWith(domain);
-          }
-          return allowed === origin;
-        });
-
-        if (matches) {
+        if (isOriginAllowed(origin, allowedOrigins)) {
           return callback(null, true);
         }
         return callback(new Error(`CORS origin not allowed: ${origin}`));

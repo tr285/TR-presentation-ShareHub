@@ -21,6 +21,34 @@ export interface RoomSessionState {
   peers: Array<{ peerId: string; role: ParticipantRole }>;
 }
 
+export function getSignalingUrl(): string {
+  const envUrl = process.env.NEXT_PUBLIC_SIGNALING_URL;
+  if (typeof window === "undefined") {
+    return envUrl || "http://localhost:3001";
+  }
+
+  // If envUrl is set to localhost, but the client is browsing from a LAN IP / hostname,
+  // dynamically replace localhost with the actual host so mobile devices & other computers connect properly.
+  if (envUrl) {
+    try {
+      const parsed = new URL(envUrl);
+      if (
+        (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
+        window.location.hostname !== "localhost" &&
+        window.location.hostname !== "127.0.0.1"
+      ) {
+        parsed.hostname = window.location.hostname;
+        return parsed.toString().replace(/\/$/, "");
+      }
+    } catch {
+      // fallback to envUrl
+    }
+    return envUrl;
+  }
+
+  return `${window.location.protocol}//${window.location.hostname}:3001`;
+}
+
 export function useSignaling() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [socketId, setSocketId] = useState<string | null>(null);
@@ -42,16 +70,12 @@ export function useSignaling() {
 
   useEffect(() => {
     // Determine signaling server URL
-    const signalingUrl =
-      process.env.NEXT_PUBLIC_SIGNALING_URL ||
-      (typeof window !== "undefined"
-        ? `${window.location.protocol}//${window.location.hostname}:3001`
-        : "http://localhost:3001");
+    const signalingUrl = getSignalingUrl();
 
     const socketInstance = io(signalingUrl, {
       transports: ["websocket", "polling"],
-      reconnectionAttempts: 10,
-      reconnectionDelay: 2000,
+      reconnectionAttempts: 15,
+      reconnectionDelay: 1500,
       timeout: 10000,
     });
 
@@ -63,14 +87,25 @@ export function useSignaling() {
       setError(null);
     });
 
-    socketInstance.on("disconnect", () => {
+    socketInstance.on("disconnect", (reason) => {
       setConnectionStatus("disconnected");
       setSocketId(null);
+      if (reason === "io server disconnect") {
+        socketInstance.connect();
+      }
     });
 
     socketInstance.on("connect_error", (err) => {
       setConnectionStatus("error");
-      setError(`Signaling connection error: ${err.message}`);
+      const url = getSignalingUrl();
+      const isPollOrConnError =
+        err.message === "xhr poll error" ||
+        err.message.includes("websocket error") ||
+        err.message.includes("fetch failed");
+      const message = isPollOrConnError
+        ? `Cannot reach signaling server at ${url}. Please verify both frontend and signaling server are running ('npm run dev').`
+        : `Signaling connection error (${err.message}). Retrying...`;
+      setError(message);
     });
 
     socketInstance.on(
