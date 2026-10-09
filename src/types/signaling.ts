@@ -104,4 +104,9 @@ export interface HealthCheckResponse {
   activeRooms: number;
   activeSockets: number;
   version: string;
+  memoryMb?: {
+    rss: number;
+    heapTotal: number;
+    heapUsed: number;
+  };
 }

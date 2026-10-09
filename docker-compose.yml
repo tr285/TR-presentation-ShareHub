@@ -1,0 +1,61 @@
+# ==============================================================================
+# TR Presentation ShareHub - Multi-Container Production Compose Stack
+# ==============================================================================
+
+services:
+  # 1. Signaling Server (Socket.IO + WebRTC Relay Negotiation)
+  signaling:
+    build:
+      context: .
+      dockerfile: Dockerfile.signaling
+    container_name: sharehub-signaling
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - SIGNALING_PORT=3001
+      - SIGNALING_HOST=0.0.0.0
+      - CORS_ORIGIN=http://localhost:3000,http://127.0.0.1:3000
+      - RATE_LIMIT_MSGS_PER_10S=120
+      - RATE_LIMIT_CREATES_PER_MIN=10
+      - LOG_LEVEL=info
+      - LOG_FORMAT=json
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3001/health"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    networks:
+      - sharehub-network
+
+  # 2. Frontend Application (Next.js App Router)
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        - NEXT_PUBLIC_SIGNALING_URL=http://localhost:3001
+    container_name: sharehub-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    depends_on:
+      signaling:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - sharehub-network
+
+networks:
+  sharehub-network:
+    driver: bridge

@@ -14,6 +14,7 @@ import type {
 
 export interface SignalingServerConfig {
   port?: number;
+  host?: string;
   corsOrigins?: string[];
   autoCleanupIntervalMs?: number;
   serverInstance?: http.Server;
@@ -26,7 +27,7 @@ export interface SignalingServerInstance {
   io: SocketIOServer;
   roomManager: RoomManager;
   rateLimiter: RateLimiter;
-  start: (port?: number) => Promise<number>;
+  start: (port?: number, host?: string) => Promise<number>;
   stop: () => Promise<void>;
 }
 
@@ -93,6 +94,7 @@ export function createSignalingServer(
 
       if (url.pathname === "/health" || url.pathname === "/api/health") {
         const stats = roomManager.getStats();
+        const mem = process.memoryUsage();
         const healthData: HealthCheckResponse = {
           status: "ok",
           uptimeSeconds: Math.floor((Date.now() - startTime) / 1000),
@@ -100,6 +102,11 @@ export function createSignalingServer(
           activeRooms: stats.activeRooms,
           activeSockets: stats.activeSockets,
           version: "1.0.0",
+          memoryMb: {
+            rss: Math.round(mem.rss / 1024 / 1024),
+            heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+            heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+          },
         };
 
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -720,16 +727,26 @@ export function createSignalingServer(
     io,
     roomManager,
     rateLimiter,
-    start: (port: number = config.port ?? DEFAULT_PORT): Promise<number> => {
+    start: (
+      port: number = config.port ?? DEFAULT_PORT,
+      host?: string
+    ): Promise<number> => {
       return new Promise((resolve, reject) => {
         httpServer.once("error", reject);
-        httpServer.listen(port, () => {
+        const listenHost = host || config.host;
+        const listenCallback = () => {
           httpServer.removeListener("error", reject);
           const address = httpServer.address();
           const assignedPort =
             typeof address === "object" && address ? address.port : port;
           resolve(assignedPort);
-        });
+        };
+
+        if (listenHost) {
+          httpServer.listen(port, listenHost, listenCallback);
+        } else {
+          httpServer.listen(port, listenCallback);
+        }
       });
     },
     stop: (): Promise<void> => {

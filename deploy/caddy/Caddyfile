@@ -1,0 +1,38 @@
+# ==============================================================================
+# TR Presentation ShareHub - Production Caddyfile
+# Automatic HTTPS via Let's Encrypt / Zero-Config SSL
+# ==============================================================================
+
+# Frontend Application
+sharehub.example.com {
+    encode zstd gzip
+
+    # Security Headers
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+
+    # Next.js Static Cache
+    @static path /_next/static/*
+    header @static Cache-Control "public, max-age=31536000, immutable"
+
+    # Reverse proxy to Next.js server
+    reverse_proxy 127.0.0.1:3000
+}
+
+# Signaling Server (Socket.IO + WebSockets)
+signaling.example.com {
+    encode zstd gzip
+
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+    }
+
+    # Reverse proxy to Node.js signaling server (handles WebSockets automatically)
+    reverse_proxy 127.0.0.1:3001
+}

@@ -1,27 +1,41 @@
 import { createSignalingServer } from "./signaling-server";
+import { logger } from "./logger";
 
 const PORT = parseInt(process.env.SIGNALING_PORT || process.env.PORT || "3001", 10);
+const HOST = process.env.SIGNALING_HOST || process.env.HOST || "0.0.0.0";
 
 const server = createSignalingServer({
   port: PORT,
+  host: HOST,
 });
 
 server
-  .start(PORT)
+  .start(PORT, HOST)
   .then((actualPort) => {
-    console.log(`[TR ShareHub Signaling] Server listening on port ${actualPort}`);
-    console.log(`[TR ShareHub Signaling] Health check at http://localhost:${actualPort}/health`);
+    logger.info("TR Presentation ShareHub Signaling Server started", {
+      port: actualPort,
+      host: HOST,
+      nodeEnv: process.env.NODE_ENV || "development",
+      healthUrl: `http://${HOST === "0.0.0.0" ? "localhost" : HOST}:${actualPort}/health`,
+      corsOrigins: process.env.CORS_ORIGIN || "default",
+    });
   })
   .catch((err) => {
-    console.error("[TR ShareHub Signaling] Failed to start server:", err);
+    logger.error("Failed to start signaling server", err);
     process.exit(1);
   });
 
-const shutdown = async () => {
-  console.log("\n[TR ShareHub Signaling] Shutting down gracefully...");
-  await server.stop();
-  process.exit(0);
+const shutdown = async (signal: string) => {
+  logger.info(`Received ${signal}. Shutting down signaling server gracefully...`);
+  try {
+    await server.stop();
+    logger.info("Signaling server terminated cleanly.");
+    process.exit(0);
+  } catch (err) {
+    logger.error("Error during server shutdown", err);
+    process.exit(1);
+  }
 };
 
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
