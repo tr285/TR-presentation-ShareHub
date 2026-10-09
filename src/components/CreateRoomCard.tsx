@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 
 interface CreateRoomCardProps {
-  onCreate: (options: { maxParticipants: number }) => Promise<void>;
+  onCreate: (options: { maxParticipants: number; passcode?: string }) => Promise<void>;
   isLoading: boolean;
   disabled?: boolean;
 }
@@ -14,11 +14,16 @@ export function CreateRoomCard({
   disabled = false,
 }: CreateRoomCardProps) {
   const [maxParticipants, setMaxParticipants] = useState(12);
+  const [requirePasscode, setRequirePasscode] = useState(false);
+  const [passcode, setPasscode] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (disabled || isLoading) return;
-    await onCreate({ maxParticipants });
+    await onCreate({
+      maxParticipants,
+      passcode: requirePasscode && passcode.trim() ? passcode.trim() : undefined,
+    });
   };
 
   return (
@@ -77,11 +82,56 @@ export function CreateRoomCard({
               </div>
             </div>
 
+            {/* Optional Passcode Protection */}
+            <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-3">
+              <div className="flex items-center justify-between">
+                <label
+                  htmlFor="toggle-require-passcode"
+                  className="flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-300"
+                >
+                  <svg className="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                    />
+                  </svg>
+                  <span>Require Passcode PIN</span>
+                </label>
+                <input
+                  type="checkbox"
+                  id="toggle-require-passcode"
+                  checked={requirePasscode}
+                  onChange={(e) => setRequirePasscode(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-cyan-500 focus:ring-cyan-500/20 focus:ring-offset-0 cursor-pointer"
+                />
+              </div>
+
+              {requirePasscode && (
+                <div className="pt-1">
+                  <input
+                    type="text"
+                    id="input-create-passcode"
+                    value={passcode}
+                    onChange={(e) => setPasscode(e.target.value)}
+                    placeholder="Enter 4-8 digit PIN (e.g. 8492)"
+                    maxLength={16}
+                    autoComplete="off"
+                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-900 border border-slate-700 text-white placeholder-slate-500 text-xs font-mono tracking-wider focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                  />
+                  <p className="mt-1.5 text-[11px] text-slate-400">
+                    Viewers must enter this passcode before video streaming commences.
+                  </p>
+                </div>
+              )}
+            </div>
+
             <div className="pt-2">
               <button
                 type="submit"
                 id="btn-create-room"
-                disabled={disabled || isLoading}
+                disabled={disabled || isLoading || (requirePasscode && !passcode.trim())}
                 className="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-cyan-500 via-indigo-600 to-cyan-500 bg-size-200 bg-pos-0 hover:bg-pos-100 text-white font-semibold text-sm shadow-lg shadow-cyan-500/25 transition-all duration-300 hover:shadow-cyan-500/40 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {isLoading ? (

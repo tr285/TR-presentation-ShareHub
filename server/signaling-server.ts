@@ -1,6 +1,7 @@
 import http from "node:http";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { RoomManager } from "./room-manager";
+import { RateLimiter } from "./rate-limiter";
 import type {
   CreateRoomResponse,
   HealthCheckResponse,
@@ -16,12 +17,15 @@ export interface SignalingServerConfig {
   corsOrigins?: string[];
   autoCleanupIntervalMs?: number;
   serverInstance?: http.Server;
+  rateLimitMessagesPer10s?: number;
+  rateLimitCreatesPerMin?: number;
 }
 
 export interface SignalingServerInstance {
   httpServer: http.Server;
   io: SocketIOServer;
   roomManager: RoomManager;
+  rateLimiter: RateLimiter;
   start: (port?: number) => Promise<number>;
   stop: () => Promise<void>;
 }
@@ -34,6 +38,11 @@ const DEFAULT_ALLOWED_ORIGINS = [
   "http://127.0.0.1:3001",
 ];
 
+const MAX_SDP_LENGTH = 65536; // 64 KB
+const MAX_CANDIDATE_LENGTH = 2048; // 2 KB
+const MAX_ROOM_ID_LENGTH = 32;
+const MAX_PASSCODE_LENGTH = 64;
+
 export function createSignalingServer(
   config: SignalingServerConfig = {}
 ): SignalingServerInstance {
@@ -45,12 +54,27 @@ export function createSignalingServer(
       : DEFAULT_ALLOWED_ORIGINS;
 
   const roomManager = new RoomManager(config.autoCleanupIntervalMs ?? 30000);
+  const rateLimiter = new RateLimiter(60000);
   const startTime = Date.now();
+
+  const maxMessagesPer10s = config.rateLimitMessagesPer10s ?? 120;
+  const maxCreatesPerMin = config.rateLimitCreatesPerMin ?? 10;
 
   const httpServer =
     config.serverInstance ||
     http.createServer((req, res) => {
-      // Basic HTTP request handler for health and metrics
+      // Security headers
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      res.setHeader("X-Frame-Options", "DENY");
+      res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+
+      if (process.env.NODE_ENV === "production") {
+        res.setHeader(
+          "Strict-Transport-Security",
+          "max-age=31536000; includeSubDomains"
+        );
+      }
+
       const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
 
       // Set CORS headers for HTTP endpoints
@@ -104,12 +128,10 @@ export function createSignalingServer(
   const io = new SocketIOServer(httpServer, {
     cors: {
       origin: (origin, callback) => {
-        // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
         if (!origin) return callback(null, true);
         if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
           return callback(null, true);
         }
-        // Check wildcard subdomains or exact matches
         const matches = allowedOrigins.some((allowed) => {
           if (allowed.startsWith("*.")) {
             const domain = allowed.slice(2);
@@ -129,6 +151,7 @@ export function createSignalingServer(
     transports: ["websocket", "polling"],
     pingTimeout: 20000,
     pingInterval: 25000,
+    maxHttpBufferSize: 1e6, // 1 MB max socket payload
   });
 
   // Background room expiration notification loop
@@ -149,17 +172,82 @@ export function createSignalingServer(
   }
 
   io.on("connection", (socket: Socket) => {
+    // Middleware-like rate check helper
+    const checkMessageRate = (): boolean => {
+      const rate = rateLimiter.isAllowed(socket.id, maxMessagesPer10s, 10000);
+      if (!rate.allowed) {
+        socket.emit("error", {
+          code: "RATE_LIMITED",
+          message: "Too many messages sent. Please slow down.",
+        });
+        return false;
+      }
+      return true;
+    };
+
     // 1. Create Room
     socket.on(
       "create-room",
       (
-        payload: { maxParticipants?: number; customRoomId?: string } = {},
+        payload: {
+          maxParticipants?: number;
+          customRoomId?: string;
+          passcode?: string;
+        } = {},
         callback?: (res: CreateRoomResponse) => void
       ) => {
         try {
+          if (!checkMessageRate()) return;
+
+          // Rate limit room creation specifically
+          const createRate = rateLimiter.isAllowed(
+            `create:${socket.handshake.address || socket.id}`,
+            maxCreatesPerMin,
+            60000
+          );
+          if (!createRate.allowed) {
+            const errRes: CreateRoomResponse = {
+              success: false,
+              code: "RATE_LIMITED",
+              error: "Too many rooms created recently. Please wait a minute.",
+            };
+            if (callback) callback(errRes);
+            return;
+          }
+
+          // Input size validation
+          if (
+            payload.customRoomId &&
+            (typeof payload.customRoomId !== "string" ||
+              payload.customRoomId.length > MAX_ROOM_ID_LENGTH)
+          ) {
+            const errRes: CreateRoomResponse = {
+              success: false,
+              code: "INVALID_PAYLOAD",
+              error: "Room ID is too long.",
+            };
+            if (callback) callback(errRes);
+            return;
+          }
+
+          if (
+            payload.passcode &&
+            (typeof payload.passcode !== "string" ||
+              payload.passcode.length > MAX_PASSCODE_LENGTH)
+          ) {
+            const errRes: CreateRoomResponse = {
+              success: false,
+              code: "PAYLOAD_TOO_LARGE",
+              error: "Passcode cannot exceed 64 characters.",
+            };
+            if (callback) callback(errRes);
+            return;
+          }
+
           const result = roomManager.createRoom({
             maxParticipants: payload.maxParticipants,
             customRoomId: payload.customRoomId,
+            passcode: payload.passcode,
           });
 
           if (!result.success || !result.roomId) {
@@ -172,7 +260,12 @@ export function createSignalingServer(
             return;
           }
 
-          const joinResult = roomManager.joinRoom(result.roomId, socket.id, "presenter");
+          const joinResult = roomManager.joinRoom(
+            result.roomId,
+            socket.id,
+            "presenter",
+            payload.passcode
+          );
           if (!joinResult.success) {
             const errRes: CreateRoomResponse = {
               success: false,
@@ -189,6 +282,8 @@ export function createSignalingServer(
             success: true,
             roomId: result.roomId,
             role: "presenter",
+            presenterToken: result.presenterToken,
+            isPasscodeProtected: result.isPasscodeProtected,
             expiresAt: result.expiresAt,
           };
 
@@ -207,11 +302,18 @@ export function createSignalingServer(
     socket.on(
       "join-room",
       (
-        payload: { roomId: string; role?: ParticipantRole },
+        payload: { roomId: string; role?: ParticipantRole; passcode?: string },
         callback?: (res: JoinRoomResponse) => void
       ) => {
         try {
-          if (!payload || !payload.roomId || typeof payload.roomId !== "string") {
+          if (!checkMessageRate()) return;
+
+          if (
+            !payload ||
+            !payload.roomId ||
+            typeof payload.roomId !== "string" ||
+            payload.roomId.length > MAX_ROOM_ID_LENGTH
+          ) {
             const errRes: JoinRoomResponse = {
               success: false,
               code: "INVALID_PAYLOAD",
@@ -222,13 +324,42 @@ export function createSignalingServer(
           }
 
           const normalizedRoomId = roomManager.normalizeRoomId(payload.roomId);
+          const lockoutKey = `${socket.id}:${normalizedRoomId}`;
+
+          // Check if socket is locked out due to excessive wrong passcode attempts
+          if (rateLimiter.isLockedOut(lockoutKey)) {
+            const errRes: JoinRoomResponse = {
+              success: false,
+              code: "LOCKED_OUT",
+              error: "Too many incorrect passcode attempts. Locked out for 5 minutes.",
+            };
+            if (callback) callback(errRes);
+            return;
+          }
+
           const joinResult = roomManager.joinRoom(
             normalizedRoomId,
             socket.id,
-            payload.role
+            payload.role,
+            payload.passcode
           );
 
           if (!joinResult.success || !joinResult.room || !joinResult.participant) {
+            if (joinResult.code === "INVALID_PASSCODE") {
+              const lockout = rateLimiter.recordFailedAttempt(lockoutKey, 5, 5 * 60 * 1000);
+              const errMsg = lockout.locked
+                ? "Too many incorrect passcode attempts. Locked out for 5 minutes."
+                : `Incorrect passcode (${lockout.remainingAttempts} attempts remaining).`;
+
+              const errRes: JoinRoomResponse = {
+                success: false,
+                code: lockout.locked ? "LOCKED_OUT" : "INVALID_PASSCODE",
+                error: errMsg,
+              };
+              if (callback) callback(errRes);
+              return;
+            }
+
             const errRes: JoinRoomResponse = {
               success: false,
               code: joinResult.code || "JOIN_FAILED",
@@ -238,12 +369,14 @@ export function createSignalingServer(
             return;
           }
 
+          // Successful join -> reset failed passcode attempts
+          rateLimiter.resetAttempts(lockoutKey);
+
           const room = joinResult.room;
           const assignedRole = joinResult.participant.role;
 
           socket.join(room.roomId);
 
-          // Build list of existing peers in room (excluding joining socket)
           const existingPeers: Array<{ peerId: string; role: ParticipantRole }> = [];
           for (const [sid, participant] of room.participants.entries()) {
             if (sid !== socket.id) {
@@ -257,6 +390,7 @@ export function createSignalingServer(
             role: assignedRole,
             presenterSocketId: room.presenterSocketId,
             isSharing: room.isSharing,
+            isPasscodeProtected: Boolean(room.passcodeHash),
             peers: existingPeers,
             expiresAt: room.expiresAt,
           };
@@ -264,7 +398,6 @@ export function createSignalingServer(
           if (callback) callback(response);
           socket.emit("room-joined", response);
 
-          // Notify existing peers that a new participant joined
           socket.to(room.roomId).emit("peer-joined", {
             peerId: socket.id,
             role: assignedRole,
@@ -283,6 +416,8 @@ export function createSignalingServer(
       "leave-room",
       (payload?: { roomId?: string }, callback?: (res: { success: boolean }) => void) => {
         try {
+          if (!checkMessageRate()) return;
+
           const leaveResult = roomManager.leaveRoom(socket.id);
           if (leaveResult.roomId) {
             socket.leave(leaveResult.roomId);
@@ -305,14 +440,16 @@ export function createSignalingServer(
       }
     );
 
-    // 4. WebRTC Offer Relay
+    // 4. WebRTC Offer Relay with Payload Size & Scope Check
     socket.on(
       "signal-offer",
       (
         payload: SignalOfferPayload,
-        callback?: (res: { success: boolean; error?: string }) => void
+        callback?: (res: { success: boolean; error?: string; code?: string }) => void
       ) => {
         try {
+          if (!checkMessageRate()) return;
+
           if (
             !payload ||
             !payload.targetSocketId ||
@@ -322,7 +459,18 @@ export function createSignalingServer(
             typeof payload.offer.sdp !== "string"
           ) {
             if (callback) {
-              callback({ success: false, error: "Invalid offer payload." });
+              callback({ success: false, code: "INVALID_PAYLOAD", error: "Invalid offer payload." });
+            }
+            return;
+          }
+
+          if (payload.offer.sdp.length > MAX_SDP_LENGTH) {
+            if (callback) {
+              callback({
+                success: false,
+                code: "PAYLOAD_TOO_LARGE",
+                error: "SDP offer exceeds size limit.",
+              });
             }
             return;
           }
@@ -334,6 +482,7 @@ export function createSignalingServer(
             if (callback) {
               callback({
                 success: false,
+                code: "PEER_NOT_FOUND",
                 error: "Target peer is not in the same room.",
               });
             }
@@ -348,19 +497,21 @@ export function createSignalingServer(
           if (callback) callback({ success: true });
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : "Relay error";
-          if (callback) callback({ success: false, error: message });
+          if (callback) callback({ success: false, code: "INTERNAL_ERROR", error: message });
         }
       }
     );
 
-    // 5. WebRTC Answer Relay
+    // 5. WebRTC Answer Relay with Payload Size & Scope Check
     socket.on(
       "signal-answer",
       (
         payload: SignalAnswerPayload,
-        callback?: (res: { success: boolean; error?: string }) => void
+        callback?: (res: { success: boolean; error?: string; code?: string }) => void
       ) => {
         try {
+          if (!checkMessageRate()) return;
+
           if (
             !payload ||
             !payload.targetSocketId ||
@@ -370,7 +521,18 @@ export function createSignalingServer(
             typeof payload.answer.sdp !== "string"
           ) {
             if (callback) {
-              callback({ success: false, error: "Invalid answer payload." });
+              callback({ success: false, code: "INVALID_PAYLOAD", error: "Invalid answer payload." });
+            }
+            return;
+          }
+
+          if (payload.answer.sdp.length > MAX_SDP_LENGTH) {
+            if (callback) {
+              callback({
+                success: false,
+                code: "PAYLOAD_TOO_LARGE",
+                error: "SDP answer exceeds size limit.",
+              });
             }
             return;
           }
@@ -382,6 +544,7 @@ export function createSignalingServer(
             if (callback) {
               callback({
                 success: false,
+                code: "PEER_NOT_FOUND",
                 error: "Target peer is not in the same room.",
               });
             }
@@ -396,19 +559,21 @@ export function createSignalingServer(
           if (callback) callback({ success: true });
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : "Relay error";
-          if (callback) callback({ success: false, error: message });
+          if (callback) callback({ success: false, code: "INTERNAL_ERROR", error: message });
         }
       }
     );
 
-    // 6. WebRTC ICE Candidate Relay
+    // 6. WebRTC ICE Candidate Relay with Payload Size & Scope Check
     socket.on(
       "signal-ice-candidate",
       (
         payload: SignalIceCandidatePayload,
-        callback?: (res: { success: boolean; error?: string }) => void
+        callback?: (res: { success: boolean; error?: string; code?: string }) => void
       ) => {
         try {
+          if (!checkMessageRate()) return;
+
           if (
             !payload ||
             !payload.targetSocketId ||
@@ -417,7 +582,22 @@ export function createSignalingServer(
             typeof payload.candidate.candidate !== "string"
           ) {
             if (callback) {
-              callback({ success: false, error: "Invalid ICE candidate payload." });
+              callback({
+                success: false,
+                code: "INVALID_PAYLOAD",
+                error: "Invalid ICE candidate payload.",
+              });
+            }
+            return;
+          }
+
+          if (payload.candidate.candidate.length > MAX_CANDIDATE_LENGTH) {
+            if (callback) {
+              callback({
+                success: false,
+                code: "PAYLOAD_TOO_LARGE",
+                error: "Candidate string exceeds size limit.",
+              });
             }
             return;
           }
@@ -429,6 +609,7 @@ export function createSignalingServer(
             if (callback) {
               callback({
                 success: false,
+                code: "PEER_NOT_FOUND",
                 error: "Target peer is not in the same room.",
               });
             }
@@ -443,22 +624,28 @@ export function createSignalingServer(
           if (callback) callback({ success: true });
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : "Relay error";
-          if (callback) callback({ success: false, error: message });
+          if (callback) callback({ success: false, code: "INTERNAL_ERROR", error: message });
         }
       }
     );
 
-    // 7. Screen Sharing Status Notification
+    // 7. Screen Sharing Status with Presenter Token Verification
     socket.on(
       "screen-share-status",
       (
-        payload: { isSharing: boolean },
-        callback?: (res: { success: boolean; error?: string }) => void
+        payload: { isSharing: boolean; presenterToken?: string },
+        callback?: (res: { success: boolean; error?: string; code?: string }) => void
       ) => {
         try {
+          if (!checkMessageRate()) return;
+
           if (!payload || typeof payload.isSharing !== "boolean") {
             if (callback) {
-              callback({ success: false, error: "isSharing boolean required." });
+              callback({
+                success: false,
+                code: "INVALID_PAYLOAD",
+                error: "isSharing boolean required.",
+              });
             }
             return;
           }
@@ -466,17 +653,27 @@ export function createSignalingServer(
           const room = roomManager.getRoomForSocket(socket.id);
           if (!room) {
             if (callback) {
-              callback({ success: false, error: "Socket not in a room." });
+              callback({
+                success: false,
+                code: "NOT_IN_ROOM",
+                error: "Socket not in a room.",
+              });
             }
             return;
           }
 
-          const updated = roomManager.setScreenSharing(socket.id, payload.isSharing);
+          const updated = roomManager.setScreenSharing(
+            socket.id,
+            payload.isSharing,
+            payload.presenterToken
+          );
+
           if (!updated) {
             if (callback) {
               callback({
                 success: false,
-                error: "Cannot change screen share status.",
+                code: "UNAUTHORIZED",
+                error: "Unauthorized: presenter permission denied.",
               });
             }
             return;
@@ -490,7 +687,7 @@ export function createSignalingServer(
           if (callback) callback({ success: true });
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : "Status error";
-          if (callback) callback({ success: false, error: message });
+          if (callback) callback({ success: false, code: "INTERNAL_ERROR", error: message });
         }
       }
     );
@@ -522,6 +719,7 @@ export function createSignalingServer(
     httpServer,
     io,
     roomManager,
+    rateLimiter,
     start: (port: number = config.port ?? DEFAULT_PORT): Promise<number> => {
       return new Promise((resolve, reject) => {
         httpServer.once("error", reject);
@@ -538,6 +736,7 @@ export function createSignalingServer(
       return new Promise((resolve) => {
         clearInterval(expirationTimer);
         roomManager.destroy();
+        rateLimiter.destroy();
         io.close(() => {
           httpServer.close(() => {
             resolve();

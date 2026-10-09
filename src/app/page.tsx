@@ -40,6 +40,7 @@ function ShareHubContent() {
     socketId,
     roomId: roomSession.roomId,
     isPresenter,
+    presenterToken: roomSession.presenterToken,
     peers: roomSession.peers,
     videoRef,
     isSignalingSharing: roomSession.isSharing,
@@ -48,7 +49,10 @@ function ShareHubContent() {
   const [isCreating, setIsCreating] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
 
-  const handleCreateRoom = async (options: { maxParticipants: number }) => {
+  const handleCreateRoom = async (options: {
+    maxParticipants: number;
+    passcode?: string;
+  }) => {
     setIsCreating(true);
     try {
       await createRoom(options);
@@ -59,10 +63,10 @@ function ShareHubContent() {
     }
   };
 
-  const handleJoinRoom = async (roomId: string) => {
+  const handleJoinRoom = async (roomId: string, passcode?: string) => {
     setIsJoining(true);
     try {
-      await joinRoom(roomId, "viewer");
+      await joinRoom(roomId, "viewer", passcode);
     } catch {
       // Error handled by useSignaling
     } finally {

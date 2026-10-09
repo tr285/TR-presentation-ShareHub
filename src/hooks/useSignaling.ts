@@ -14,6 +14,8 @@ export interface RoomSessionState {
   roomId: string | null;
   role: ParticipantRole | null;
   presenterSocketId: string | null;
+  presenterToken: string | null;
+  isPasscodeProtected: boolean;
   isSharing: boolean;
   expiresAt: number | null;
   peers: Array<{ peerId: string; role: ParticipantRole }>;
@@ -27,6 +29,8 @@ export function useSignaling() {
     roomId: null,
     role: null,
     presenterSocketId: null,
+    presenterToken: null,
+    isPasscodeProtected: false,
     isSharing: false,
     expiresAt: null,
     peers: [],
@@ -128,6 +132,8 @@ export function useSignaling() {
         roomId: null,
         role: null,
         presenterSocketId: null,
+        presenterToken: null,
+        isPasscodeProtected: false,
         isSharing: false,
         expiresAt: null,
         peers: [],
@@ -142,7 +148,11 @@ export function useSignaling() {
   }, []);
 
   const createRoom = useCallback(
-    async (options?: { maxParticipants?: number; customRoomId?: string }): Promise<string> => {
+    async (options?: {
+      maxParticipants?: number;
+      customRoomId?: string;
+      passcode?: string;
+    }): Promise<string> => {
       const socket = socketRef.current;
       if (!socket || !socket.connected) {
         throw new Error("Not connected to signaling server. Please wait or refresh.");
@@ -163,6 +173,8 @@ export function useSignaling() {
             roomId: res.roomId,
             role: "presenter",
             presenterSocketId: socket.id || null,
+            presenterToken: res.presenterToken || null,
+            isPasscodeProtected: Boolean(res.isPasscodeProtected),
             isSharing: false,
             expiresAt: res.expiresAt || null,
             peers: [],
@@ -176,7 +188,11 @@ export function useSignaling() {
   );
 
   const joinRoom = useCallback(
-    async (roomId: string, requestedRole?: ParticipantRole): Promise<boolean> => {
+    async (
+      roomId: string,
+      requestedRole?: ParticipantRole,
+      passcode?: string
+    ): Promise<boolean> => {
       const socket = socketRef.current;
       if (!socket || !socket.connected) {
         throw new Error("Not connected to signaling server. Please wait or refresh.");
@@ -187,7 +203,7 @@ export function useSignaling() {
       return new Promise<boolean>((resolve, reject) => {
         socket.emit(
           "join-room",
-          { roomId: roomId.trim(), role: requestedRole },
+          { roomId: roomId.trim(), role: requestedRole, passcode },
           (res: JoinRoomResponse) => {
             if (!res.success || !res.roomId) {
               const msg = res.error || "Failed to join room.";
@@ -200,6 +216,8 @@ export function useSignaling() {
               roomId: res.roomId,
               role: res.role || "viewer",
               presenterSocketId: res.presenterSocketId || null,
+              presenterToken: null,
+              isPasscodeProtected: Boolean(res.isPasscodeProtected),
               isSharing: Boolean(res.isSharing),
               expiresAt: res.expiresAt || null,
               peers: res.peers || [],
@@ -223,6 +241,8 @@ export function useSignaling() {
       roomId: null,
       role: null,
       presenterSocketId: null,
+      presenterToken: null,
+      isPasscodeProtected: false,
       isSharing: false,
       expiresAt: null,
       peers: [],
@@ -239,7 +259,7 @@ export function useSignaling() {
       return new Promise<boolean>((resolve) => {
         socket.emit(
           "screen-share-status",
-          { isSharing },
+          { isSharing, presenterToken: roomSession.presenterToken },
           (res: { success: boolean; error?: string }) => {
             if (res.success) {
               setRoomSession((prev) => ({
@@ -256,7 +276,7 @@ export function useSignaling() {
         );
       });
     },
-    []
+    [roomSession.presenterToken]
   );
 
   return {

@@ -10,6 +10,7 @@ interface UseWebRTCProps {
   socketId: string | null;
   roomId: string | null;
   isPresenter: boolean;
+  presenterToken?: string | null;
   peers: Array<{ peerId: string; role: ParticipantRole }>;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   isSignalingSharing: boolean;
@@ -20,6 +21,7 @@ export function useWebRTC({
   socketId,
   roomId,
   isPresenter,
+  presenterToken = null,
   peers,
   videoRef,
   isSignalingSharing,
@@ -82,7 +84,10 @@ export function useWebRTC({
 
     const socket = socketRef.current;
     if (socket && socket.connected) {
-      socket.emit("screen-share-status", { isSharing: false });
+      socket.emit("screen-share-status", {
+        isSharing: false,
+        presenterToken: presenterToken || undefined,
+      });
     }
 
     // Close viewer peer connections on presenter stop
@@ -91,7 +96,7 @@ export function useWebRTC({
         closePeerConnection(peerId);
       }
     }
-  }, [isPresenter, socketRef, videoRef, closePeerConnection]);
+  }, [isPresenter, presenterToken, socketRef, videoRef, closePeerConnection]);
 
   /**
    * Creates or retrieves a peer connection for a given peer
@@ -208,7 +213,10 @@ export function useWebRTC({
       // Notify signaling server
       const socket = socketRef.current;
       if (socket && socket.connected) {
-        socket.emit("screen-share-status", { isSharing: true });
+        socket.emit("screen-share-status", {
+          isSharing: true,
+          presenterToken: presenterToken || undefined,
+        });
       }
 
       // Initiate WebRTC offer to all existing peers in the room
@@ -243,7 +251,7 @@ export function useWebRTC({
       }
       setIsSharingScreen(false);
     }
-  }, [peers, socketRef, socketId, videoRef, getOrCreatePeerConnection, stopScreenShare]);
+  }, [peers, presenterToken, socketRef, socketId, videoRef, getOrCreatePeerConnection, stopScreenShare]);
 
   /**
    * Handle WebRTC signaling messages from server

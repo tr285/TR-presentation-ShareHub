@@ -3,7 +3,7 @@
 import React, { useState } from "react";
 
 interface JoinRoomCardProps {
-  onJoin: (roomId: string) => Promise<void>;
+  onJoin: (roomId: string, passcode?: string) => Promise<void>;
   initialRoomId?: string;
   isLoading: boolean;
   disabled?: boolean;
@@ -17,6 +17,8 @@ export function JoinRoomCard({
 }: JoinRoomCardProps) {
   const [roomId, setRoomId] = useState(initialRoomId.toUpperCase());
   const [prevInitial, setPrevInitial] = useState(initialRoomId);
+  const [passcode, setPasscode] = useState("");
+  const [showPasscodeInput, setShowPasscodeInput] = useState(false);
   const [formatError, setFormatError] = useState<string | null>(null);
 
   if (initialRoomId !== prevInitial) {
@@ -34,7 +36,6 @@ export function JoinRoomCard({
     try {
       const text = await navigator.clipboard.readText();
       if (text) {
-        // If user pasted a full URL like http://localhost:3000/?room=TR-123-456
         let extracted = text.trim();
         try {
           const url = new URL(extracted);
@@ -63,7 +64,7 @@ export function JoinRoomCard({
       return;
     }
     if (disabled || isLoading) return;
-    await onJoin(clean);
+    await onJoin(clean, passcode.trim() || undefined);
   };
 
   return (
@@ -95,7 +96,7 @@ export function JoinRoomCard({
             sharing on any screen.
           </p>
 
-          <form onSubmit={handleSubmit} className="space-y-5">
+          <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label
@@ -142,6 +143,48 @@ export function JoinRoomCard({
                 <p id="error-format-room" className="mt-2 text-xs text-rose-400 font-medium">
                   {formatError}
                 </p>
+              )}
+            </div>
+
+            {/* Optional PIN Field / Toggle */}
+            <div className="pt-1">
+              {!showPasscodeInput ? (
+                <button
+                  type="button"
+                  id="btn-toggle-passcode"
+                  onClick={() => setShowPasscodeInput(true)}
+                  className="text-xs text-slate-400 hover:text-purple-300 flex items-center gap-1.5 transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                    />
+                  </svg>
+                  <span>Room requires a Passcode PIN? Click here</span>
+                </button>
+              ) : (
+                <div>
+                  <label
+                    htmlFor="input-join-passcode"
+                    className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5"
+                  >
+                    Room PIN / Passcode
+                  </label>
+                  <input
+                    type="password"
+                    id="input-join-passcode"
+                    name="passcode"
+                    value={passcode}
+                    onChange={(e) => setPasscode(e.target.value)}
+                    placeholder="Enter Room PIN"
+                    maxLength={16}
+                    autoComplete="off"
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-950/80 border border-slate-700/80 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 text-white placeholder-slate-500 font-mono text-sm tracking-wider"
+                  />
+                </div>
               )}
             </div>
 

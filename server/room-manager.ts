@@ -10,6 +10,7 @@ export interface CreateRoomOptions {
   customRoomId?: string;
   maxParticipants?: number;
   ttlMs?: number;
+  passcode?: string;
 }
 
 export interface JoinRoomResult {
@@ -123,6 +124,8 @@ export class RoomManager {
   public createRoom(options: CreateRoomOptions = {}): {
     success: boolean;
     roomId?: string;
+    presenterToken?: string;
+    isPasscodeProtected?: boolean;
     expiresAt?: number;
     error?: string;
   } {
@@ -156,12 +159,23 @@ export class RoomManager {
       )
     );
 
+    // Generate cryptographic token for presenter authorization
+    const presenterToken = crypto.randomBytes(32).toString("hex");
+
+    // Optional passcode hash
+    let passcodeHash: string | null = null;
+    if (options.passcode && typeof options.passcode === "string" && options.passcode.trim().length > 0) {
+      passcodeHash = crypto.createHash("sha256").update(options.passcode.trim()).digest("hex");
+    }
+
     const now = Date.now();
     const roomState: RoomState = {
       roomId,
       createdAt: now,
       expiresAt: now + ttl,
       presenterSocketId: null,
+      presenterToken,
+      passcodeHash,
       isSharing: false,
       maxParticipants,
       participants: new Map(),
@@ -172,17 +186,20 @@ export class RoomManager {
     return {
       success: true,
       roomId,
+      presenterToken,
+      isPasscodeProtected: Boolean(passcodeHash),
       expiresAt: roomState.expiresAt,
     };
   }
 
   /**
-   * Adds a socket to a room with validation
+   * Adds a socket to a room with validation and passcode checking
    */
   public joinRoom(
     roomIdInput: string,
     socketId: string,
-    requestedRole?: ParticipantRole
+    requestedRole?: ParticipantRole,
+    passcode?: string
   ): JoinRoomResult {
     const roomId = this.normalizeRoomId(roomIdInput);
     const room = this.rooms.get(roomId);
@@ -204,6 +221,29 @@ export class RoomManager {
       };
     }
 
+    // Verify passcode if room is passcode-protected
+    if (room.passcodeHash) {
+      if (!passcode || typeof passcode !== "string" || passcode.trim().length === 0) {
+        return {
+          success: false,
+          code: "INVALID_PASSCODE",
+          error: "A passcode is required to join this room.",
+        };
+      }
+
+      const inputHash = crypto.createHash("sha256").update(passcode.trim()).digest("hex");
+      const hashA = Buffer.from(inputHash);
+      const hashB = Buffer.from(room.passcodeHash);
+
+      if (hashA.length !== hashB.length || !crypto.timingSafeEqual(hashA, hashB)) {
+        return {
+          success: false,
+          code: "INVALID_PASSCODE",
+          error: "Incorrect passcode.",
+        };
+      }
+    }
+
     // Check if already in another room
     const currentRoomId = this.socketToRoom.get(socketId);
     if (currentRoomId && currentRoomId !== roomId) {
@@ -222,9 +262,8 @@ export class RoomManager {
     // Determine role
     let role: ParticipantRole = requestedRole ?? "viewer";
     if (requestedRole === "presenter") {
-      // If a presenter already exists and is active, and it's not this socket
+      // If a presenter already exists and is active, demote to viewer
       if (room.presenterSocketId && room.presenterSocketId !== socketId) {
-        // Demote to viewer
         role = "viewer";
       } else {
         room.presenterSocketId = socketId;
@@ -292,11 +331,20 @@ export class RoomManager {
     };
   }
 
-  public setScreenSharing(socketId: string, isSharing: boolean): boolean {
+  public setScreenSharing(
+    socketId: string,
+    isSharing: boolean,
+    presenterToken?: string
+  ): boolean {
     const roomId = this.socketToRoom.get(socketId);
     if (!roomId) return false;
     const room = this.rooms.get(roomId);
     if (!room) return false;
+
+    // Verify presenter authorization
+    if (presenterToken && room.presenterToken !== presenterToken) {
+      return false;
+    }
 
     // Only current presenter or claiming presenter can set sharing
     if (room.presenterSocketId !== socketId && isSharing) {
@@ -311,9 +359,6 @@ export class RoomManager {
     }
 
     room.isSharing = isSharing;
-    if (!isSharing && room.presenterSocketId === socketId) {
-      // Keep presenter assigned or wait until track stops
-    }
     return true;
   }
 
@@ -378,6 +423,7 @@ export class RoomManager {
         expiresAt: room.expiresAt,
         presenterSocketId: room.presenterSocketId,
         isSharing: room.isSharing,
+        isPasscodeProtected: Boolean(room.passcodeHash),
         maxParticipants: room.maxParticipants,
         participantCount: room.participants.size,
       });

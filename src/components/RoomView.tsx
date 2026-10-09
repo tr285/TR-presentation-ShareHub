@@ -30,7 +30,15 @@ export function RoomView({
   const [timeRemaining, setTimeRemaining] = useState<string>("");
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  const { roomId, role, presenterSocketId, isSharing, peers, expiresAt } = roomSession;
+  const {
+    roomId,
+    role,
+    presenterSocketId,
+    isPasscodeProtected,
+    isSharing,
+    peers,
+    expiresAt,
+  } = roomSession;
   const isPresenter: boolean =
     role === "presenter" || Boolean(socketId && presenterSocketId === socketId);
 
@@ -141,6 +149,24 @@ export function RoomView({
             >
               {isPresenter ? "Presenter" : "Viewer"}
             </span>
+
+            {isPasscodeProtected && (
+              <span
+                id="badge-pin-protected"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-amber-500/10 text-amber-300 border border-amber-500/30"
+                title="Room requires Passcode PIN"
+              >
+                <svg className="w-3 h-3 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                  />
+                </svg>
+                <span className="hidden sm:inline">PIN Protected</span>
+              </span>
+            )}
 
             {timeRemaining && (
               <span

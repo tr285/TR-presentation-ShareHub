@@ -11,6 +11,8 @@ export interface RoomState {
   createdAt: number;
   expiresAt: number;
   presenterSocketId: string | null;
+  presenterToken: string; // Secret token for verifying presenter authorization
+  passcodeHash: string | null; // SHA-256 hash if passcode protected
   isSharing: boolean;
   maxParticipants: number;
   participants: Map<string, ParticipantInfo>;
@@ -22,6 +24,7 @@ export interface SerializedRoomState {
   expiresAt: number;
   presenterSocketId: string | null;
   isSharing: boolean;
+  isPasscodeProtected: boolean;
   maxParticipants: number;
   participantCount: number;
 }
@@ -35,6 +38,8 @@ export interface BaseResponse {
 export interface CreateRoomResponse extends BaseResponse {
   roomId?: string;
   role?: ParticipantRole;
+  presenterToken?: string;
+  isPasscodeProtected?: boolean;
   expiresAt?: number;
 }
 
@@ -43,6 +48,7 @@ export interface JoinRoomResponse extends BaseResponse {
   role?: ParticipantRole;
   presenterSocketId?: string | null;
   isSharing?: boolean;
+  isPasscodeProtected?: boolean;
   peers?: Array<{ peerId: string; role: ParticipantRole }>;
   expiresAt?: number;
 }
@@ -83,6 +89,10 @@ export interface SignalingError {
     | "NOT_IN_ROOM"
     | "PEER_NOT_FOUND"
     | "RATE_LIMITED"
+    | "INVALID_PASSCODE"
+    | "UNAUTHORIZED"
+    | "PAYLOAD_TOO_LARGE"
+    | "LOCKED_OUT"
     | "INTERNAL_ERROR";
   message: string;
 }
