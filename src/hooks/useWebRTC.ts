@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import type { Socket } from "socket.io-client";
-import { getRTCConfiguration } from "../utils/webrtc-config";
+import {
+  getRTCConfiguration,
+  parseCandidatePairStats,
+  isTurnConfigured,
+  type ConnectionDiagnostics,
+} from "../utils/webrtc-config";
 import type { ParticipantRole } from "../types/signaling";
 
 interface UseWebRTCProps {
@@ -29,6 +34,8 @@ export function useWebRTC({
   const [isSharingScreen, setIsSharingScreen] = useState(false);
   const [sharingError, setSharingError] = useState<string | null>(null);
   const [connectionStates, setConnectionStates] = useState<Record<string, RTCPeerConnectionState>>({});
+  const [iceConnectionStates, setIceConnectionStates] = useState<Record<string, RTCIceConnectionState>>({});
+  const [diagnostics, setDiagnostics] = useState<ConnectionDiagnostics | null>(null);
 
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
@@ -59,6 +66,11 @@ export function useWebRTC({
       delete next[peerId];
       return next;
     });
+    setIceConnectionStates((prev) => {
+      const next = { ...prev };
+      delete next[peerId];
+      return next;
+    });
   }, []);
 
   /**
@@ -81,6 +93,7 @@ export function useWebRTC({
     }
 
     setIsSharingScreen(false);
+    setDiagnostics(null);
 
     const socket = socketRef.current;
     if (socket && socket.connected) {
@@ -97,6 +110,40 @@ export function useWebRTC({
       }
     }
   }, [isPresenter, presenterToken, socketRef, videoRef, closePeerConnection]);
+
+  /**
+   * Re-initiates ICE connection negotiation on demand or after a failure
+   */
+  const restartConnection = useCallback(
+    async (targetPeerId?: string) => {
+      const peersToRestart = targetPeerId
+        ? [targetPeerId]
+        : Array.from(peerConnectionsRef.current.keys());
+
+      for (const peerId of peersToRestart) {
+        const pc = peerConnectionsRef.current.get(peerId);
+        if (!pc) continue;
+
+        if (isPresenter && pc.restartIce) {
+          try {
+            pc.restartIce();
+            const offer = await pc.createOffer({ iceRestart: true });
+            await pc.setLocalDescription(offer);
+            const socket = socketRef.current;
+            if (socket && socket.connected) {
+              socket.emit("signal-offer", {
+                targetSocketId: peerId,
+                offer,
+              });
+            }
+          } catch (err) {
+            console.error(`Failed to restart ICE with peer ${peerId}:`, err);
+          }
+        }
+      }
+    },
+    [isPresenter, socketRef]
+  );
 
   /**
    * Creates or retrieves a peer connection for a given peer
@@ -139,16 +186,18 @@ export function useWebRTC({
           ...prev,
           [targetPeerId]: state,
         }));
+      };
 
-        if (state === "failed") {
-          // Attempt ICE restart if initiator
-          if (isInitiator && pc?.restartIce) {
-            try {
-              pc.restartIce();
-            } catch {
-              // Ignore restart error
-            }
-          }
+      pc.oniceconnectionstatechange = () => {
+        const iceState = pc?.iceConnectionState ?? "closed";
+        setIceConnectionStates((prev) => ({
+          ...prev,
+          [targetPeerId]: iceState,
+        }));
+
+        if (iceState === "failed" && isInitiator) {
+          // Automatic ICE restart trigger
+          restartConnection(targetPeerId);
         }
       };
 
@@ -164,7 +213,7 @@ export function useWebRTC({
 
       return pc;
     },
-    [socketRef, videoRef]
+    [socketRef, videoRef, restartConnection]
   );
 
   /**
@@ -219,24 +268,32 @@ export function useWebRTC({
         });
       }
 
-      // Initiate WebRTC offer to all existing peers in the room
+      // Establish connections with currently present peers
       for (const peer of peers) {
         if (peer.peerId !== socketId) {
+          const pc = getOrCreatePeerConnection(peer.peerId, true);
+
+          // Add video tracks
+          stream.getTracks().forEach((track) => {
+            const senders = pc.getSenders();
+            const alreadyAdded = senders.some((s) => s.track?.id === track.id);
+            if (!alreadyAdded) {
+              pc.addTrack(track, stream);
+            }
+          });
+
+          // Create WebRTC Offer
           try {
-            const pc = getOrCreatePeerConnection(peer.peerId, true);
             const offer = await pc.createOffer();
             await pc.setLocalDescription(offer);
 
             if (socket && socket.connected) {
               socket.emit("signal-offer", {
                 targetSocketId: peer.peerId,
-                offer: {
-                  type: "offer",
-                  sdp: pc.localDescription?.sdp || offer.sdp || "",
-                },
+                offer,
               });
             }
-          } catch (err: unknown) {
+          } catch (err) {
             console.error(`Failed to initiate offer to peer ${peer.peerId}:`, err);
           }
         }
@@ -269,26 +326,27 @@ export function useWebRTC({
         const pc = getOrCreatePeerConnection(payload.fromPeerId, false);
         await pc.setRemoteDescription(new RTCSessionDescription(payload.offer));
 
-        // Flush buffered ICE candidates
+        // Flush any queued ICE candidates
         const queue = iceCandidateQueuesRef.current.get(payload.fromPeerId) || [];
         for (const candidate of queue) {
-          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch {
+            // ICE candidate buffer flush error
+          }
         }
         iceCandidateQueuesRef.current.set(payload.fromPeerId, []);
 
-        // Create answer and return to presenter
+        // Create WebRTC Answer
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
 
         socket.emit("signal-answer", {
           targetSocketId: payload.fromPeerId,
-          answer: {
-            type: "answer",
-            sdp: pc.localDescription?.sdp || answer.sdp || "",
-          },
+          answer,
         });
       } catch (err) {
-        console.error("Error processing offer:", err);
+        console.error("Failed to process WebRTC offer:", err);
       }
     };
 
@@ -302,52 +360,63 @@ export function useWebRTC({
         if (pc) {
           await pc.setRemoteDescription(new RTCSessionDescription(payload.answer));
 
-          // Flush buffered ICE candidates
+          // Flush any queued ICE candidates
           const queue = iceCandidateQueuesRef.current.get(payload.fromPeerId) || [];
           for (const candidate of queue) {
-            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            try {
+              await pc.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch {
+              // ICE candidate buffer flush error
+            }
           }
           iceCandidateQueuesRef.current.set(payload.fromPeerId, []);
         }
       } catch (err) {
-        console.error("Error processing answer:", err);
+        console.error("Failed to process WebRTC answer:", err);
       }
     };
 
-    // 3. Handle incoming trickle ICE candidate
+    // 3. Handle trickle ICE Candidate
     const handleIceCandidate = async (payload: {
       fromPeerId: string;
       candidate: RTCIceCandidateInit;
     }) => {
-      try {
-        const pc = peerConnectionsRef.current.get(payload.fromPeerId);
-        if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+      const pc = peerConnectionsRef.current.get(payload.fromPeerId);
+      if (pc && pc.remoteDescription && pc.remoteDescription.type) {
+        try {
           await pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
-        } else {
-          // Queue candidate until remote description is set
-          const queue = iceCandidateQueuesRef.current.get(payload.fromPeerId) || [];
-          queue.push(payload.candidate);
-          iceCandidateQueuesRef.current.set(payload.fromPeerId, queue);
+        } catch (err) {
+          console.error("Error adding remote ICE candidate:", err);
         }
-      } catch (err) {
-        console.error("Error adding ICE candidate:", err);
+      } else {
+        // Buffer candidate until remote description is set
+        const queue = iceCandidateQueuesRef.current.get(payload.fromPeerId) || [];
+        queue.push(payload.candidate);
+        iceCandidateQueuesRef.current.set(payload.fromPeerId, queue);
       }
     };
 
-    // 4. When a new peer joins while presenter is sharing
-    const handlePeerJoined = async (payload: { peerId: string; role: ParticipantRole }) => {
+    // 4. When a new peer joins while presenter is already streaming
+    const handlePeerJoined = async (payload: { peerId: string }) => {
       if (isPresenter && localStreamRef.current) {
+        const stream = localStreamRef.current;
+        const pc = getOrCreatePeerConnection(payload.peerId, true);
+
+        stream.getTracks().forEach((track) => {
+          const senders = pc.getSenders();
+          const alreadyAdded = senders.some((s) => s.track?.id === track.id);
+          if (!alreadyAdded) {
+            pc.addTrack(track, stream);
+          }
+        });
+
         try {
-          const pc = getOrCreatePeerConnection(payload.peerId, true);
           const offer = await pc.createOffer();
           await pc.setLocalDescription(offer);
 
           socket.emit("signal-offer", {
             targetSocketId: payload.peerId,
-            offer: {
-              type: "offer",
-              sdp: pc.localDescription?.sdp || offer.sdp || "",
-            },
+            offer,
           });
         } catch (err) {
           console.error("Failed to send offer to new peer:", err);
@@ -375,6 +444,45 @@ export function useWebRTC({
     };
   }, [socketRef, isPresenter, getOrCreatePeerConnection, closePeerConnection]);
 
+  // Periodic network diagnostics & candidate pair inspection
+  useEffect(() => {
+    if (!isSharingScreen && !hasRemoteStream) {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      // Find connected peer connection
+      for (const pc of peerConnectionsRef.current.values()) {
+        if (
+          pc.connectionState === "connected" ||
+          pc.iceConnectionState === "connected" ||
+          pc.iceConnectionState === "completed"
+        ) {
+          try {
+            const stats = await pc.getStats();
+            const diag = parseCandidatePairStats(stats);
+            setDiagnostics(diag);
+            return;
+          } catch {
+            // Stats fetch ignored
+          }
+        }
+      }
+
+      if (peerConnectionsRef.current.size > 0) {
+        setDiagnostics((prev) => prev ?? {
+          transportType: "connecting",
+          localCandidateType: null,
+          remoteCandidateType: null,
+          rttMs: null,
+          turnConfigured: isTurnConfigured(),
+        });
+      }
+    }, 2000);
+
+    return () => clearInterval(interval);
+  }, [isSharingScreen, hasRemoteStream]);
+
   // Handle stream reset when signaling marks isSharing as false (viewer side)
   useEffect(() => {
     if (!isPresenter && !isSignalingSharing) {
@@ -398,13 +506,19 @@ export function useWebRTC({
     };
   }, [roomId, closePeerConnection]);
 
+  // Only expose diagnostics when stream is active
+  const activeDiagnostics = isSharingScreen || hasRemoteStream ? diagnostics : null;
+
   return {
     isSharingScreen,
     sharingError,
     hasRemoteStream,
     connectionStates,
+    iceConnectionStates,
+    diagnostics: activeDiagnostics,
     startScreenShare,
     stopScreenShare,
+    restartConnection,
     clearError,
   };
 }

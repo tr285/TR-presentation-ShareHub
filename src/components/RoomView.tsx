@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import type { RoomSessionState } from "../hooks/useSignaling";
+import type { ConnectionDiagnostics } from "../utils/webrtc-config";
 import { QRCodeModal } from "./QRCodeModal";
 
 interface RoomViewProps {
@@ -10,6 +11,9 @@ interface RoomViewProps {
   onLeaveRoom: () => void;
   onStartShare?: () => void;
   onStopShare?: () => void;
+  onRestartConnection?: () => void;
+  diagnostics?: ConnectionDiagnostics | null;
+  iceConnectionStates?: Record<string, RTCIceConnectionState>;
   videoRef?: React.RefObject<HTMLVideoElement | null>;
   isSharingScreen?: boolean;
   isSharingError?: string | null;
@@ -21,11 +25,15 @@ export function RoomView({
   onLeaveRoom,
   onStartShare,
   onStopShare,
+  onRestartConnection,
+  diagnostics = null,
+  iceConnectionStates = {},
   videoRef,
   isSharingScreen = false,
   isSharingError = null,
 }: RoomViewProps) {
   const [isQRModalOpen, setIsQRModalOpen] = useState(false);
+  const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState<string>("");
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -41,6 +49,11 @@ export function RoomView({
   } = roomSession;
   const isPresenter: boolean =
     role === "presenter" || Boolean(socketId && presenterSocketId === socketId);
+
+  // Check if any peer has failed ICE connection
+  const hasFailedConnection = Object.values(iceConnectionStates).some(
+    (state) => state === "failed" || state === "disconnected"
+  );
 
   // Expiration countdown
   useEffect(() => {
@@ -212,7 +225,8 @@ export function RoomView({
         <div className="relative flex-1 min-h-[460px] rounded-3xl bg-slate-900/90 border border-slate-800 shadow-2xl flex flex-col items-center justify-center overflow-hidden">
           {/* Top Stage Bar */}
           <div className="absolute top-4 left-4 right-4 z-20 flex items-center justify-between pointer-events-none">
-            <div className="pointer-events-auto flex items-center gap-2">
+            <div className="pointer-events-auto flex items-center gap-2 flex-wrap">
+              {/* Stream Status Badge */}
               {isSharing || isSharingScreen ? (
                 <span
                   id="badge-stream-live"
@@ -230,9 +244,78 @@ export function RoomView({
                   Stream Idle
                 </span>
               )}
+
+              {/* Dynamic Network Transport Badge (Local LAN vs NAT P2P vs TURN Relay) */}
+              {(isSharing || isSharingScreen) && diagnostics && (
+                <button
+                  id="badge-network-transport"
+                  onClick={() => setIsDiagnosticsOpen(true)}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold border transition-all cursor-pointer shadow-sm ${
+                    diagnostics.transportType === "local-lan"
+                      ? "bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30"
+                      : diagnostics.transportType === "direct-p2p"
+                      ? "bg-cyan-500/20 border-cyan-500/40 text-cyan-300 hover:bg-cyan-500/30"
+                      : diagnostics.transportType === "turn-relay"
+                      ? "bg-amber-500/20 border-amber-500/40 text-amber-300 hover:bg-amber-500/30"
+                      : "bg-purple-500/20 border-purple-500/40 text-purple-300"
+                  }`}
+                  title="Click to view network diagnostics"
+                >
+                  <span
+                    className={`h-2 w-2 rounded-full ${
+                      diagnostics.transportType === "local-lan"
+                        ? "bg-emerald-400"
+                        : diagnostics.transportType === "direct-p2p"
+                        ? "bg-cyan-400"
+                        : diagnostics.transportType === "turn-relay"
+                        ? "bg-amber-400"
+                        : "bg-purple-400 animate-pulse"
+                    }`}
+                  />
+                  <span>
+                    {diagnostics.transportType === "local-lan"
+                      ? "Local Wi-Fi (P2P)"
+                      : diagnostics.transportType === "direct-p2p"
+                      ? "Direct P2P (STUN)"
+                      : diagnostics.transportType === "turn-relay"
+                      ? "Relay (TURN)"
+                      : "Negotiating Route..."}
+                  </span>
+                  {diagnostics.rttMs !== null && (
+                    <span className="text-[10px] font-mono opacity-80">
+                      {diagnostics.rttMs}ms
+                    </span>
+                  )}
+                </button>
+              )}
+
+              {/* Failure / Reconnect Button */}
+              {hasFailedConnection && onRestartConnection && (
+                <button
+                  id="btn-reconnect"
+                  onClick={onRestartConnection}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-rose-500/20 border border-rose-500/40 text-rose-300 hover:bg-rose-500/30 transition-all cursor-pointer"
+                >
+                  <svg className="w-3.5 h-3.5 text-rose-400 animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                  <span>Reconnecting... Click to Retry</span>
+                </button>
+              )}
             </div>
 
             <div className="pointer-events-auto flex items-center gap-2">
+              <button
+                id="btn-open-diagnostics"
+                onClick={() => setIsDiagnosticsOpen(true)}
+                className="p-2 rounded-xl bg-slate-950/80 hover:bg-slate-800 text-slate-300 border border-slate-800 transition-colors"
+                title="Network & Connectivity Diagnostics"
+              >
+                <svg className="w-4 h-4 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </button>
+
               <button
                 id="btn-toggle-fullscreen"
                 onClick={toggleFullscreen}
@@ -408,6 +491,133 @@ export function RoomView({
           </div>
         </div>
       </div>
+
+      {/* Network Diagnostics Modal */}
+      {isDiagnosticsOpen && (
+        <div
+          id="modal-diagnostics"
+          className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in"
+          onClick={() => setIsDiagnosticsOpen(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-3xl bg-slate-900 border border-slate-800 p-6 shadow-2xl relative space-y-5"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="h-8 w-8 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400">
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-white">Connectivity & Relay Diagnostics</h3>
+                  <p className="text-xs text-slate-400">WebRTC transport and ICE candidates</p>
+                </div>
+              </div>
+              <button
+                id="btn-close-diagnostics"
+                onClick={() => setIsDiagnosticsOpen(false)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Transport classification details */}
+            <div className="space-y-3">
+              <div className="p-3.5 rounded-2xl bg-slate-950/70 border border-slate-800 flex items-center justify-between">
+                <div>
+                  <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Active Route</div>
+                  <div className="text-sm font-bold text-white mt-0.5">
+                    {diagnostics?.transportType === "local-lan"
+                      ? "Local Wi-Fi (Host P2P)"
+                      : diagnostics?.transportType === "direct-p2p"
+                      ? "Direct P2P via STUN (NAT)"
+                      : diagnostics?.transportType === "turn-relay"
+                      ? "TURN Relay (Enterprise / NAT fallback)"
+                      : "Connecting / Negotiating"}
+                  </div>
+                </div>
+                <span
+                  className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                    diagnostics?.transportType === "local-lan"
+                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                      : diagnostics?.transportType === "direct-p2p"
+                      ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
+                      : diagnostics?.transportType === "turn-relay"
+                      ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                      : "bg-purple-500/20 text-purple-300 border border-purple-500/30"
+                  }`}
+                >
+                  {diagnostics?.transportType ?? "pending"}
+                </span>
+              </div>
+
+              {/* Metrics grid */}
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                  <div className="text-slate-400">Round-Trip Latency</div>
+                  <div className="text-white font-mono font-bold mt-1">
+                    {diagnostics?.rttMs !== null && diagnostics?.rttMs !== undefined
+                      ? `${diagnostics.rttMs} ms`
+                      : "Measuring..."}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                  <div className="text-slate-400">TURN Relay Configured</div>
+                  <div className="text-white font-mono font-bold mt-1">
+                    {diagnostics?.turnConfigured ? (
+                      <span className="text-emerald-400">Configured (TURN)</span>
+                    ) : (
+                      <span className="text-amber-400">STUN Only</span>
+                    )}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                  <div className="text-slate-400">Local Candidate Type</div>
+                  <div className="text-white font-mono font-bold mt-1">
+                    {diagnostics?.localCandidateType ?? "Gathering"}
+                  </div>
+                </div>
+                <div className="p-3 rounded-xl bg-slate-950/60 border border-slate-800/80">
+                  <div className="text-slate-400">Remote Candidate Type</div>
+                  <div className="text-white font-mono font-bold mt-1">
+                    {diagnostics?.remoteCandidateType ?? "Gathering"}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Architecture Explanations */}
+            <div className="p-4 rounded-2xl bg-slate-950/50 border border-slate-800 space-y-2 text-xs text-slate-300">
+              <div className="font-semibold text-cyan-300 flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                Network Mode Requirements
+              </div>
+              <p className="text-slate-400 leading-relaxed text-[11px]">
+                <strong className="text-slate-200">Local-only Wi-Fi:</strong> Requires a compatible local Wi-Fi router without AP Client Isolation. Devices stream directly across the subnet without internet bandwidth.
+              </p>
+              <p className="text-slate-400 leading-relaxed text-[11px]">
+                <strong className="text-slate-200">Internet & Cross-Network:</strong> Crossing different routers, cellular carriers, or corporate firewalls requires reachable signaling and STUN/TURN relays to traverse symmetric NATs.
+              </p>
+            </div>
+
+            <div className="pt-2">
+              <button
+                onClick={() => setIsDiagnosticsOpen(false)}
+                className="w-full py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold transition-colors"
+              >
+                Close Diagnostics
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* QR Code Modal */}
       {roomId && (

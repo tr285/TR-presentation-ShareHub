@@ -33,8 +33,11 @@ function ShareHubContent() {
   const {
     isSharingScreen,
     sharingError,
+    diagnostics,
+    iceConnectionStates,
     startScreenShare,
     stopScreenShare,
+    restartConnection,
   } = useWebRTC({
     socketRef,
     socketId,
@@ -113,6 +116,9 @@ function ShareHubContent() {
             }}
             onStartShare={startScreenShare}
             onStopShare={stopScreenShare}
+            onRestartConnection={restartConnection}
+            diagnostics={diagnostics}
+            iceConnectionStates={iceConnectionStates}
             videoRef={videoRef}
             isSharingScreen={isSharingScreen}
             isSharingError={sharingError}
