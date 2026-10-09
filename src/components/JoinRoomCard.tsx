@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import { useBluetoothDiscovery } from "../hooks/useBluetoothDiscovery";
 
 interface JoinRoomCardProps {
   onJoin: (roomId: string, passcode?: string) => Promise<void>;
@@ -20,6 +21,17 @@ export function JoinRoomCard({
   const [passcode, setPasscode] = useState("");
   const [showPasscodeInput, setShowPasscodeInput] = useState(false);
   const [formatError, setFormatError] = useState<string | null>(null);
+
+  const {
+    isSupported: isBtSupported,
+    platformStatus: btStatus,
+    isScanning: isBtScanning,
+    lastDiscoveredRoomId,
+    discoveredDeviceName,
+    error: btError,
+    discoverNearbyRoom,
+    clearBluetoothError,
+  } = useBluetoothDiscovery();
 
   if (initialRoomId !== prevInitial) {
     setPrevInitial(initialRoomId);
@@ -49,6 +61,15 @@ export function JoinRoomCard({
       }
     } catch {
       // Clipboard permission denied or unsupported
+    }
+  };
+
+  const handleBluetoothDiscover = async () => {
+    setFormatError(null);
+    clearBluetoothError();
+    const foundId = await discoverNearbyRoom();
+    if (foundId) {
+      setRoomId(foundId.toUpperCase());
     }
   };
 
@@ -105,22 +126,67 @@ export function JoinRoomCard({
                 >
                   Sharing Room ID
                 </label>
-                <button
-                  type="button"
-                  id="btn-paste-room-id"
-                  onClick={handlePaste}
-                  className="text-xs text-purple-400 hover:text-purple-300 font-medium flex items-center gap-1 transition-colors"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
-                    />
-                  </svg>
-                  <span>Paste ID</span>
-                </button>
+                <div className="flex items-center gap-3">
+                  {/* Bluetooth Discovery Button (Conditional on OS/Browser Support) */}
+                  {isBtSupported ? (
+                    <button
+                      type="button"
+                      id="btn-bluetooth-discover"
+                      onClick={handleBluetoothDiscover}
+                      disabled={disabled || isLoading || isBtScanning}
+                      className="text-xs text-cyan-400 hover:text-cyan-300 font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                      title="Find nearby ShareHub presenter using Web Bluetooth"
+                    >
+                      <svg
+                        className={`w-3.5 h-3.5 ${isBtScanning ? "animate-spin text-cyan-300" : ""}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M12 2v20l6-5-6-5 6-5-6-5zM6 7l12 10M6 17l12-10"
+                        />
+                      </svg>
+                      <span>{isBtScanning ? "Scanning..." : "Nearby Bluetooth"}</span>
+                    </button>
+                  ) : (
+                    <span
+                      id="badge-bt-unsupported"
+                      className="text-[10px] text-slate-500 hidden sm:inline-flex items-center gap-1 cursor-help"
+                      title={btStatus.reason || "Web Bluetooth is not supported on this platform/browser."}
+                    >
+                      <svg className="w-3 h-3 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                        />
+                      </svg>
+                      <span>BT Discovery: Chrome/Edge</span>
+                    </span>
+                  )}
+
+                  <button
+                    type="button"
+                    id="btn-paste-room-id"
+                    onClick={handlePaste}
+                    className="text-xs text-purple-400 hover:text-purple-300 font-medium flex items-center gap-1 transition-colors"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"
+                      />
+                    </svg>
+                    <span>Paste ID</span>
+                  </button>
+                </div>
               </div>
 
               <div className="relative">
@@ -138,6 +204,51 @@ export function JoinRoomCard({
                   className="w-full px-4 py-3.5 rounded-2xl bg-slate-950/80 border border-slate-700/80 focus:border-purple-500 focus:ring-2 focus:ring-purple-500/20 text-white placeholder-slate-500 font-mono text-base tracking-wider transition-all disabled:opacity-50"
                 />
               </div>
+
+              {/* Bluetooth Discovery Success Banner */}
+              {lastDiscoveredRoomId && (
+                <div
+                  id="bt-discovered-pill"
+                  className="mt-2.5 px-3 py-2 rounded-xl bg-cyan-950/70 border border-cyan-500/30 text-cyan-200 text-xs flex items-center justify-between animate-in fade-in"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="h-2 w-2 rounded-full bg-cyan-400 animate-pulse" />
+                    <span>
+                      Nearby Presenter: <strong>{discoveredDeviceName || lastDiscoveredRoomId}</strong>
+                    </span>
+                  </div>
+                  <span className="text-[10px] text-cyan-400 font-mono font-medium uppercase bg-cyan-500/10 px-1.5 py-0.5 rounded">
+                    Auto-Filled
+                  </span>
+                </div>
+              )}
+
+              {/* Bluetooth Error Notice */}
+              {btError && (
+                <div
+                  id="bt-error-pill"
+                  className="mt-2.5 px-3 py-2 rounded-xl bg-amber-950/60 border border-amber-500/30 text-amber-200 text-xs flex items-center justify-between animate-in fade-in"
+                >
+                  <div className="flex items-center gap-1.5">
+                    <svg className="w-4 h-4 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+                      />
+                    </svg>
+                    <span>{btError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={clearBluetoothError}
+                    className="text-amber-400 hover:text-white text-xs ml-2 font-medium"
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              )}
 
               {formatError && (
                 <p id="error-format-room" className="mt-2 text-xs text-rose-400 font-medium">

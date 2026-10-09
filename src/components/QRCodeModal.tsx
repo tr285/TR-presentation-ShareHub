@@ -119,6 +119,12 @@ export function QRCodeModal({ isOpen, onClose, roomId }: QRCodeModalProps) {
           <div className="text-xl font-mono font-bold text-cyan-300 tracking-wider">
             {roomId}
           </div>
+          <div className="mt-2 pt-2 border-t border-slate-800/80 flex items-center justify-center gap-1.5 text-[11px] text-cyan-400/90 font-mono">
+            <svg className="w-3.5 h-3.5 text-cyan-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 2v20l6-5-6-5 6-5-6-5zM6 7l12 10M6 17l12-10" />
+            </svg>
+            <span>BLE Beacon: ShareHub-{roomId}</span>
+          </div>
         </div>
 
         <div className="flex gap-2">
