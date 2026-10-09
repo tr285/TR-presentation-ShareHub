@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test:signaling": "tsx --test tests/signaling.test.ts",
     "test:security": "tsx --test tests/security.test.ts",
-    "test:unit": "tsx --test tests/signaling.test.ts tests/webrtc-config.test.ts tests/security.test.ts",
+    "test:e2e": "tsx --test tests/e2e-flows.test.ts",
+    "test:unit": "tsx --test tests/signaling.test.ts tests/webrtc-config.test.ts tests/security.test.ts tests/e2e-flows.test.ts",
     "test": "npm run lint && npm run typecheck && npm run test:unit"
   },
   "dependencies": {
