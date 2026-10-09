@@ -1,36 +1,133 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# TR-presentation-ShareHub
 
-## Getting Started
+> **High-Performance, Ephemeral WebRTC Screen Sharing & Presentation Streaming**
 
-First, run the development server:
+[![Tests](https://img.shields.io/badge/tests-31%20passing-brightgreen.svg)]()
+[![Next.js](https://img.shields.io/badge/Next.js-16.4-black.svg)]()
+[![React](https://img.shields.io/badge/React-19.3-blue.svg)]()
+[![Socket.IO](https://img.shields.io/badge/Socket.IO-4.8-white.svg)]()
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue.svg)]()
+[![TailwindCSS](https://img.shields.io/badge/TailwindCSS-v4-38B2AC.svg)]()
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+**TR Presentation ShareHub** is a secure, cross-device screen-sharing application designed for conference rooms, lectures, team meetings, and instant demos. Presenters can broadcast their desktop screen directly to multiple audience members via WebRTC—with no user accounts, no software installation, and no cloud recording servers.
+
+---
+
+## 🌟 Key Features
+
+- **Instant Ephemeral Rooms**: Generate temporary 6-digit room IDs (`TR-XXX-XXX`) or scannable mobile QR codes with automatic 2-hour lifecycle expiration.
+- **Native Browser WebRTC Streaming**: Direct peer-to-peer 60fps presentation video with sub-second latency.
+- **Local Wi-Fi Priority**: Automatically uses `host` ICE candidates when presenter and viewers share the same Wi-Fi network, using zero external internet upload bandwidth.
+- **Enterprise NAT & TURN Fallback**: Seamlessly falls back to STUN NAT traversal or TURN relay servers (UDP 3478 / TLS 443) when crossing symmetric NATs or restrictive corporate firewalls.
+- **Passcode PIN Protection**: Optional 4–8 digit PIN protection with SHA-256 hashes, constant-time comparison (`crypto.timingSafeEqual`), and sliding-window brute-force lockout defenses.
+- **Explicit Consent**: Native browser display media picker prompt with clear start/stop presentation controls.
+- **Live Connection Diagnostics**: Real-time stage badges and modal inspecting the active candidate pair (Local Wi-Fi vs Direct P2P vs TURN Relay) and round-trip latency (RTT).
+- **Production-Ready Operations**: Multi-stage Dockerfiles, Docker Compose, Nginx/Caddy reverse proxy configs, PM2 ecosystem, and structured JSON logging.
+
+---
+
+## 🏗️ Architecture
+
+```
+                               ┌────────────────────────┐
+                               │   Presenter / Viewer   │
+                               │     Web Browser        │
+                               └───────────┬────────────┘
+                                           │
+                        ┌──────────────────┴──────────────────┐
+                        │                                     │
+           HTTPS (Port 443)                     WSS (Port 443 / 3001)
+                        │                                     │
+                        ▼                                     ▼
+           ┌─────────────────────────┐           ┌─────────────────────────┐
+           │   Frontend Application  │           │    Signaling Server     │
+           │   (Next.js App Router)  │           │   (Node.js + Socket.IO) │
+           │   Port 3000 (Internal)  │           │   Port 3001 (Internal)  │
+           └─────────────────────────┘           └─────────────────────────┘
+                                                              │
+                                             WebRTC P2P (UDP) │ Fallback
+                                                              ▼
+                                                 ┌─────────────────────────┐
+                                                 │    TURN / STUN Relay    │
+                                                 │   (coTURN on Port 443)  │
+                                                 └─────────────────────────┘
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+---
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 🚀 Quick Start (Local Development)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Prerequisites
+- Node.js `20.x` or higher (`v26.x` recommended)
+- npm `10.x` or higher
 
-## Learn More
+### 1. Clone & Install Dependencies
+```bash
+git clone https://github.com/tr285/TR-presentation-ShareHub.git
+cd TR-presentation-ShareHub
+npm install
+```
 
-To learn more about Next.js, take a look at the following resources:
+### 2. Configure Environment
+```bash
+cp .env.example .env.local
+```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### 3. Start the Signaling Server & Frontend
+In Terminal 1 (Signaling Server):
+```bash
+npm run server
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+In Terminal 2 (Next.js Frontend):
+```bash
+npm run dev
+```
 
-## Deploy on Vercel
+Open [http://localhost:3000](http://localhost:3000) in your desktop browser.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+---
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 🧪 Testing & Verification
+
+The codebase includes 31 automated tests across 4 test suites:
+- **Phase 7 E2E Suite**: Lifecycle flows, screen permissions, disconnections, and cleanup.
+- **Security Suite**: Sliding-window rate limiting, PIN brute-force lockout, and payload validation.
+- **Signaling Suite**: Room manager, participant limits, and WebRTC relay events.
+- **WebRTC Config Suite**: ICE servers, candidate pair classification, and transport types.
+
+Run the test suite:
+```bash
+npm test
+```
+
+Run production build validation:
+```bash
+npm run build
+```
+
+---
+
+## 🐳 Docker Deployment
+
+Run the complete multi-container stack with Docker Compose:
+
+```bash
+docker compose up -d --build
+```
+
+- **Frontend**: [http://localhost:3000](http://localhost:3000)
+- **Signaling Health Check**: [http://localhost:3001/health](http://localhost:3001/health)
+
+---
+
+## 📖 Documentation
+
+- [Network Connectivity & STUN/TURN Guide](docs/CONNECTIVITY.md) — Local Wi-Fi conditions, AP client isolation, NAT traversal, and coTURN setup.
+- [Production Deployment Runbook](docs/DEPLOYMENT.md) — Decoupled deployments, Nginx/Caddy SSL/WSS reverse proxy, and monitoring.
+
+---
+
+## 📄 License
+
+MIT License. Built with ❤️ for seamless, privacy-respecting presentations.
