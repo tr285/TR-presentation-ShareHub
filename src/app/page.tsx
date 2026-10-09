@@ -1,8 +1,9 @@
 "use client";
 
-import React, { Suspense, useState } from "react";
+import React, { Suspense, useState, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSignaling } from "../hooks/useSignaling";
+import { useWebRTC } from "../hooks/useWebRTC";
 import { Header } from "../components/Header";
 import { CreateRoomCard } from "../components/CreateRoomCard";
 import { JoinRoomCard } from "../components/JoinRoomCard";
@@ -11,10 +12,12 @@ import { RoomView } from "../components/RoomView";
 function ShareHubContent() {
   const searchParams = useSearchParams();
   const initialRoomQuery = searchParams.get("room") || "";
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   const {
     connectionStatus,
     socketId,
+    socketRef,
     roomSession,
     error,
     clearError,
@@ -22,6 +25,25 @@ function ShareHubContent() {
     joinRoom,
     leaveRoom,
   } = useSignaling();
+
+  const isPresenter: boolean =
+    roomSession.role === "presenter" ||
+    Boolean(socketId && roomSession.presenterSocketId === socketId);
+
+  const {
+    isSharingScreen,
+    sharingError,
+    startScreenShare,
+    stopScreenShare,
+  } = useWebRTC({
+    socketRef,
+    socketId,
+    roomId: roomSession.roomId,
+    isPresenter,
+    peers: roomSession.peers,
+    videoRef,
+    isSignalingSharing: roomSession.isSharing,
+  });
 
   const [isCreating, setIsCreating] = useState(false);
   const [isJoining, setIsJoining] = useState(false);
@@ -81,7 +103,15 @@ function ShareHubContent() {
           <RoomView
             roomSession={roomSession}
             socketId={socketId}
-            onLeaveRoom={leaveRoom}
+            onLeaveRoom={() => {
+              stopScreenShare();
+              leaveRoom();
+            }}
+            onStartShare={startScreenShare}
+            onStopShare={stopScreenShare}
+            videoRef={videoRef}
+            isSharingScreen={isSharingScreen}
+            isSharingError={sharingError}
           />
         ) : (
           <div className="flex-1 flex flex-col justify-between max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-12">
