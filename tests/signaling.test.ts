@@ -255,6 +255,29 @@ test("Signaling Server Suite", async (t) => {
     assert.strictEqual(receivedIce.fromPeerId, presenter.id);
     assert.ok(receivedIce.candidate.candidate.includes("192.168.1.100"));
 
+    // 4. End-of-candidate indication relay (empty candidate string)
+    const endOfCandidatesPromise = new Promise<{
+      fromPeerId: string;
+      candidate: { candidate?: string; sdpMid?: string };
+    }>((resolve) => {
+      viewer.on("signal-ice-candidate", resolve);
+    });
+
+    const endOfCandidatesAck = await new Promise<{ success: boolean }>((resolve) => {
+      presenter.emit(
+        "signal-ice-candidate",
+        {
+          targetSocketId: viewer.id,
+          candidate: { candidate: "", sdpMid: "0", sdpMLineIndex: 0 },
+        },
+        resolve
+      );
+    });
+    assert.strictEqual(endOfCandidatesAck.success, true);
+    const receivedEndOfCandidates = await endOfCandidatesPromise;
+    assert.strictEqual(receivedEndOfCandidates.fromPeerId, presenter.id);
+    assert.strictEqual(receivedEndOfCandidates.candidate.candidate, "");
+
     presenter.disconnect();
     viewer.disconnect();
   });

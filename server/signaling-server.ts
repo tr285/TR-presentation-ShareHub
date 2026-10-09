@@ -655,7 +655,7 @@ export function createSignalingServer(
             !payload.targetSocketId ||
             typeof payload.targetSocketId !== "string" ||
             !payload.candidate ||
-            typeof payload.candidate.candidate !== "string"
+            typeof payload.candidate !== "object"
           ) {
             if (callback) {
               callback({
@@ -667,7 +667,11 @@ export function createSignalingServer(
             return;
           }
 
-          if (payload.candidate.candidate.length > MAX_CANDIDATE_LENGTH) {
+          // Enforce size limit if a candidate string is present
+          if (
+            typeof payload.candidate.candidate === "string" &&
+            payload.candidate.candidate.length > MAX_CANDIDATE_LENGTH
+          ) {
             if (callback) {
               callback({
                 success: false,

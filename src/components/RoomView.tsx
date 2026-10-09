@@ -75,6 +75,21 @@ export function RoomView({
     return () => clearInterval(interval);
   }, [expiresAt]);
 
+  // Ensure video element plays when screen share becomes active
+  useEffect(() => {
+    if ((isSharing || isSharingScreen) && videoRef?.current) {
+      const video = videoRef.current;
+      if (video.srcObject) {
+        video.play().catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === "NotAllowedError") {
+            video.muted = true;
+            video.play().catch(() => {});
+          }
+        });
+      }
+    }
+  }, [isSharing, isSharingScreen, videoRef]);
+
   const handleCopyId = async () => {
     if (!roomId) return;
     try {
@@ -228,13 +243,23 @@ export function RoomView({
             <div className="pointer-events-auto flex items-center gap-2 flex-wrap">
               {/* Stream Status Badge */}
               {isSharing || isSharingScreen ? (
-                <span
-                  id="badge-stream-live"
-                  className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-rose-600 text-white shadow-lg shadow-rose-600/30"
-                >
-                  <span className="h-2 w-2 rounded-full bg-white animate-pulse" />
-                  LIVE SCREEN STREAM
-                </span>
+                hasFailedConnection ? (
+                  <span
+                    id="badge-stream-interrupted"
+                    className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-amber-600 text-white shadow-lg shadow-amber-600/30"
+                  >
+                    <span className="h-2 w-2 rounded-full bg-white animate-pulse" />
+                    STREAM INTERRUPTED
+                  </span>
+                ) : (
+                  <span
+                    id="badge-stream-live"
+                    className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-bold bg-rose-600 text-white shadow-lg shadow-rose-600/30"
+                  >
+                    <span className="h-2 w-2 rounded-full bg-white animate-pulse" />
+                    LIVE SCREEN STREAM
+                  </span>
+                )
               ) : (
                 <span
                   id="badge-stream-idle"

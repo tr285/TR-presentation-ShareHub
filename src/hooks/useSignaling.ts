@@ -27,26 +27,39 @@ export function getSignalingUrl(): string {
     return envUrl || "http://localhost:3001";
   }
 
-  // If envUrl is set to localhost, but the client is browsing from a LAN IP / hostname,
-  // dynamically replace localhost with the actual host so mobile devices & other computers connect properly.
+  // If an environment variable is explicitly configured
   if (envUrl) {
     try {
       const parsed = new URL(envUrl);
+
+      // Prevent Mixed Content errors: upgrade http -> https when page is on https
+      if (window.location.protocol === "https:" && parsed.protocol === "http:") {
+        parsed.protocol = "https:";
+      }
+
+      // If envUrl is set to localhost, but the client is browsing from a LAN IP / hostname,
+      // dynamically replace localhost with the actual host
       if (
         (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") &&
         window.location.hostname !== "localhost" &&
         window.location.hostname !== "127.0.0.1"
       ) {
         parsed.hostname = window.location.hostname;
-        return parsed.toString().replace(/\/$/, "");
       }
+
+      return parsed.toString().replace(/\/$/, "");
     } catch {
-      // fallback to envUrl
+      return envUrl;
     }
-    return envUrl;
   }
 
-  return `${window.location.protocol}//${window.location.hostname}:3001`;
+  // Production HTTPS fallback: connect to same-origin reverse proxy (port 443 / standard SSL)
+  if (window.location.protocol === "https:") {
+    return window.location.origin;
+  }
+
+  // Local development HTTP fallback: connect to port 3001
+  return `http://${window.location.hostname}:3001`;
 }
 
 export function useSignaling() {
