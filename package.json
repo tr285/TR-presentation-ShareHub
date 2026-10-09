@@ -6,14 +6,19 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "server": "tsx server/index.ts",
+    "server:dev": "tsx watch server/index.ts",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "test": "npm run lint && npm run typecheck"
+    "test:signaling": "tsx --test tests/signaling.test.ts",
+    "test": "npm run lint && npm run typecheck && npm run test:signaling"
   },
   "dependencies": {
     "next": "16.4.0",
     "react": "19.3.0",
-    "react-dom": "19.3.0"
+    "react-dom": "19.3.0",
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4"
   },
   "devDependencies": {
     "@tailwindcss/turbopack": "^4",
@@ -23,6 +28,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.4.0",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "typescript": "^5"
   }
 }
